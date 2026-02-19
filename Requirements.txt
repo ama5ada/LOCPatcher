@@ -1,0 +1,17 @@
+# Last Oasis Classic Patcher Requirements
+# Python 3.10+ required
+
+# External dependency
+# - platformdirs   (File location across platforms)
+
+# Builder:
+# - pyinstaller    (Bundling installer for distribution)
+
+# All other dependencies are part of the Python standard library:
+# - tkinter        (GUI)
+# - urllib         (HTTP requests)
+# - logging        (Logging)
+# - threading      (Background operations)
+# - pathlib        (Path handling)
+# - zlib           (CRC32 checksums)
+# - subprocess     (Game launching)

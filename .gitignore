@@ -1,0 +1,15 @@
+*
+
+!app.py
+!config.py
+!constants.py
+!core.py
+!log_handler.py
+!logger.py
+!main.py
+!network.py
+!requirements.txt
+!theme.py
+!utils.py
+
+!.gitignore
