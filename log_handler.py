@@ -7,9 +7,8 @@ class LogHandler(logging.Handler):
     Widget text can be dumped to a file via EXPORT LOG to easily share the exact logs associated with a problem
     """
 
-    def __init__(self, app, log_cb):
+    def __init__(self, log_cb):
         super().__init__()
-        self.app = app
         self.log_callback = log_cb
 
 

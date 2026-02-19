@@ -2,10 +2,10 @@
 # Python 3.10+ required
 
 # External dependency
-# - platformdirs   (File location across platforms)
+platformdirs          # (File location across platforms)
 
 # Builder:
-# - pyinstaller    (Bundling installer for distribution)
+# - pyinstaller >= 5.0  (Bundling installer for distribution)
 
 # All other dependencies are part of the Python standard library:
 # - tkinter        (GUI)

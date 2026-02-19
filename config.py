@@ -65,7 +65,7 @@ class PatcherConfig:
 
 
     @property
-    def launch_exe_path(self) -> str:
+    def absolute_exe_path(self) -> str:
         """Absolute path to the game executable."""
         return os.path.join(self.launch_bin_path, self.launch_exe_name)
 
@@ -90,7 +90,7 @@ class PatcherConfig:
         working_dir = patcher_section.get("working_dir", defaults.working_dir)
         working_dir = os.path.normpath(working_dir)
 
-        # Parse PATCH_CACHE — pipe-separated list, empty string -> empty list
+        # Parse PATCH_CACHE from a newline separated list of file names, empty string -> empty list
         cache_section = cfg["patch_cache"] if cfg.has_section("patch_cache") else {}
         raw_files = cache_section.get("files", "")
         patch_cache = [f.strip() for f in raw_files.splitlines() if f.strip()]

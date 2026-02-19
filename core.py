@@ -39,19 +39,17 @@ class PatcherCore:
 
     def __init__(self, working_dir: str, remote_patch_list: str, remote_host: str, net: NetworkClient, logger: logging.Logger,
         on_status: Callable[[str, str], None],
-        on_log: Callable[[str], None],
         on_step_progress: Callable[[int, int, str], None],
         on_action_progress: Callable[[int, int, str], None],
         on_patch_list_ready: Callable[[list], None] | None = None,
         on_files_deleted: Callable[[list], None] | None = None,
     ) -> None:
-        self.working_dir = os.path.normpath(working_dir).rstrip("/\\") + "/"
+        self.working_dir = os.path.normpath(working_dir)
         self.remote_patch_list = remote_patch_list
         self.remote_host = remote_host
         self._net = net
         self._log = logger
         self._on_status = on_status
-        self._on_log = on_log
         self._on_step = on_step_progress
         self._on_action = on_action_progress
         self._on_patch_list_ready = on_patch_list_ready
@@ -168,7 +166,7 @@ class PatcherCore:
             self._check_cancelled()
 
             self._on_step(idx, total, f"Scanning {idx}/{total}: {key.split('/')[-1]}")
-            if os.path.isfile(self.working_dir + key):
+            if os.path.isfile(os.path.join(self.working_dir, key)):
                 present.append(key)
             else:
                 self._log.debug("Missing: %s", key)
@@ -179,7 +177,9 @@ class PatcherCore:
 
 
     def _validate_files(self, candidates: list[str]) -> None:
-        """CRC-check every file in *candidates*, adding failures to the outdated list."""
+        """
+        CRC-check every file in *candidates*, adding failures to the outdated list.
+        """
         self._check_cancelled()
 
         total = len(candidates)
@@ -215,7 +215,7 @@ class PatcherCore:
         :return: True/False if the file CRC matches the patch list
         """
         entry = self.updated_file_map[key]
-        local_path = self.working_dir + key
+        local_path = os.path.join(self.working_dir, key)
 
         local_size = os.stat(local_path).st_size
         if local_size != entry["size"]:
@@ -235,11 +235,27 @@ class PatcherCore:
         return True
 
 
+    def _cancellable_sleep(self, seconds: float, interval: float = 0.1) -> None:
+        """
+        Sleep function that can be interrupted by a cancel action
+
+        :param seconds: Amount of time to sleep for
+        :param interval: Amount of time actually slept between each check for a cancellation
+        :return:
+        """
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if self.cancelled():
+                raise ActionCancelled()
+            time.sleep(interval)
+
+
     def download_new_files(self) -> bool:
         """
         Download every file in outdated_file_list with retry
 
         :return: True/False if all files were downloaded successfully.
+        :raises ActionCancelled: if cancelled while processing files
         """
         total_files = len(self.outdated_file_list)
         if total_files == 0:
@@ -247,6 +263,7 @@ class PatcherCore:
 
         total_bytes = sum(self.updated_file_map[f]["size"] for f in self.outdated_file_list)
         downloaded_bytes = 0
+        total_tracker = _SpeedTracker()
         all_ok = True
 
         self._on_status(f"Downloading {total_files} file(s) — {convert_file_size(total_bytes)} total", "white")
@@ -266,7 +283,7 @@ class PatcherCore:
                 self._on_status(f"[{file_idx}/{total_files}] {file_name}{attempt_suffix}", "white")
 
                 try:
-                    written = self._download_file(key, downloaded_bytes, total_bytes, file_idx, total_files)
+                    written = self._download_file(key, downloaded_bytes, total_bytes, file_idx, total_files, total_tracker)
                     if self._validate_file(key):
                         downloaded_bytes += written
                         self._log.info("Downloaded OK: %s", key)
@@ -275,13 +292,13 @@ class PatcherCore:
                     self._log.warning("Validation failed after download: %s (attempt %d)", key, attempt)
                     if attempt < MAX_RETRIES:
                         self._on_status(f"Validation failed for {file_name}, retrying in {back_off:.0f}s…", "orange")
-                        time.sleep(back_off)
+                        self._cancellable_sleep(back_off)
 
                 except (urllib.error.URLError, OSError) as exc:
                     self._log.warning("Download error %s (attempt %d): %s", key, attempt, exc)
                     if attempt < MAX_RETRIES:
                         self._on_status(f"Error downloading {file_name}, retrying in {back_off:.0f}s…", "orange")
-                        time.sleep(back_off)
+                        self._cancellable_sleep(back_off)
 
             if not success:
                 self._log.error("FAILED to download %s after %d attempts", key, MAX_RETRIES)
@@ -293,14 +310,14 @@ class PatcherCore:
         return all_ok
 
     def _download_file(self, key: str, already_downloaded: int, total_bytes: int, file_idx: int,
-                       total_files: int) -> int:
+                       total_files: int, total_tracker) -> int:
         """
         Download the file to a temp path, rename it into place
 
-        :return the number of bytes written
+        :return: the number of bytes written
 
-        :raises ValueError on a directory-traversal attempt
-        :raises InterruptedError if cancelled mid-stream
+        :raises ValueError: on a directory-traversal attempt
+        :raises ActionCancelled: if cancelled mid-stream
         """
         dest_path = os.path.normpath(os.path.join(self.working_dir, key))
         if not is_safe_path(self.working_dir, dest_path):
@@ -337,24 +354,27 @@ class PatcherCore:
                         f"{file_name}\n"
                         f"{convert_file_size(written):<10} / {convert_file_size(expected)} ({pct:.0%})\n"
                         f"{convert_file_size(int(speed_bps)) + '/s':<13}"
-                        f"ETA {format_eta(eta_sec)}",
+                        f"ETA {format_eta(eta_sec)}"
                     )
 
                     # Overall progress
                     overall = already_downloaded + written
+                    total_bps = total_tracker.update(overall)
+
+                    total_pct = overall / total_bytes if total_bytes else 0
+                    total_eta = (total_bytes - overall) / total_bps if total_bps > 0 else float("inf")
                     self._on_action(
                         overall, total_bytes,
                         f"Downloading File {file_idx}/{total_files} — \n"
-                        f"{convert_file_size(overall):<10} / {convert_file_size(total_bytes)}"
-                        f"({overall / total_bytes:.0%})" if total_bytes else "(NaN%)",
+                        f"{convert_file_size(overall):<10} / {convert_file_size(total_bytes)} "
+                        f"({total_pct:.0%})\n"
+                        f"{convert_file_size(int(total_bps)) + '/s':<13}"
+                        f"ETA {format_eta(total_eta)}",
                     )
 
             shutil.move(tmp_path, dest_path)
             tmp_path = None
             return written
-
-        except (InterruptedError, Exception):
-            raise
         finally:
             if tmp_fd is not None:
                 try:
@@ -368,7 +388,7 @@ class PatcherCore:
                     pass
 
 
-    def clear_loc_mods(self, file_list: list[str]) -> int:
+    def clear_loc_mods(self, file_list: list[str]) -> tuple[int, int, int]:
         """
         Delete every file in file_list that exists in working_dir
 
@@ -376,16 +396,19 @@ class PatcherCore:
 
         Removes files that were successfully deleted from the patch cache
 
-        :param file_list:
-        :return: count of successfully deleted files
+        :param file_list: List of files to delete (Patch Cache)
+        :return tuple[int, int, int]:
         """
         deleted = 0
+        missed = 0
+        error = 0
         successfully_removed: list[str] = []
 
         for rel_path in file_list:
             abs_path = os.path.normpath(os.path.join(self.working_dir, rel_path))
             if not is_safe_path(self.working_dir, abs_path):
-                self._log.warning("Skipping unsafe path: %s", rel_path)
+                self._log.error("Skipping unsafe path: %s", rel_path)
+                error += 1
                 continue
             if os.path.isfile(abs_path):
                 try:
@@ -395,17 +418,19 @@ class PatcherCore:
                     deleted += 1
                     successfully_removed.append(rel_path)
                 except OSError as exc:
+                    error += 1
                     self._log.error("Could not delete %s: %s", rel_path, exc)
                     self._on_status(f"ERROR deleting {rel_path.split('/')[-1]}: {exc}", "red")
             else:
                 # File already absent - still remove from cache
+                missed += 1
                 self._log.debug("File not found : %s", rel_path)
                 successfully_removed.append(rel_path)
 
         if successfully_removed and self._on_files_deleted:
             self._on_files_deleted(successfully_removed)
 
-        return deleted
+        return deleted, missed, error
 
 
 class _SpeedTracker:
@@ -415,8 +440,8 @@ class _SpeedTracker:
     Each download creates an instance which knows when the download began and when an update should occur
     """
 
-    def __init__(self, window: float = 0.5) -> None:
-        self._window = window
+    def __init__(self, updated_interval: float = 0.5) -> None:
+        self._updated_interval = updated_interval
         self._start = time.monotonic()
         self._last_time = self._start
         self._speed: float = 0.0
@@ -430,7 +455,7 @@ class _SpeedTracker:
         """
         now = time.monotonic()
         elapsed = now - self._last_time
-        if elapsed >= self._window:
+        if elapsed >= self._updated_interval:
             self._speed = total_written / (now - self._start)
             self._last_time = now
         return self._speed

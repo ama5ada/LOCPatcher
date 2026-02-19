@@ -14,6 +14,7 @@ This module contains no patcher logic, all patch operations are delegated to Pat
 
 import logging
 import os
+import sys
 import subprocess
 import threading
 from datetime import datetime
@@ -27,6 +28,7 @@ from config import PatcherConfig, CONFIG_PATH
 from constants import APP_TITLE, LOG_DIR
 from log_handler import LogHandler
 from network import NetworkClient, build_ssl_context
+from utils import find_last_oasis_win32
 
 
 from theme import (
@@ -104,81 +106,16 @@ _BUTTON_HIGHLIGHT: dict[AppButton, str] = {
 
 
 # Border log messages with dashes
-def _section_message(content) -> str:
+def _log_section_header(content) -> str:
     return "\u2500\u2500\u2500 " + content + " \u2500\u2500\u2500"
 
 
-# Helper method that identifies the Last Oasis install on a machine
-def _find_last_oasis_win32() -> str | None:
-    """
-    Return the Last Oasis game folder path, or None if not found.
-
-    1. Read the Steam install path from the Windows registry
-    2. Enumerate all Steam library folders from libraryfolders.vdf
-    3. In each library, check for the manifest file for app 903950 (Last Oasis)
-        return the steamapps/common/Last Oasis path if it exists on disk.
-    """
-
-    import os
-    import winreg
-
-    STEAM_APP_ID = "903950"
-    GAME_FOLDER_NAME = "Last Oasis"
-
-    # Registry locations Steam uses (64-bit and 32-bit views)
-    REG_PATHS = [
-        (winreg.HKEY_LOCAL_MACHINE,
-         r"SOFTWARE\WOW6432Node\Valve\Steam"),
-        (winreg.HKEY_LOCAL_MACHINE,
-         r"SOFTWARE\Valve\Steam"),
-        (winreg.HKEY_CURRENT_USER,
-         r"SOFTWARE\Valve\Steam"),
-    ]
-
-    steam_path: str | None = None
-    for hive, subkey in REG_PATHS:
-        try:
-            with winreg.OpenKey(hive, subkey) as key:
-                steam_path, _ = winreg.QueryValueEx(key, "InstallPath")
-                break
-        except OSError:
-            continue
-
-    if not steam_path or not os.path.isdir(steam_path):
-        return None
-
-    # Collect all library roots from libraryfolders.vdf
-    vdf_path = os.path.join(steam_path, "steamapps", "libraryfolders.vdf")
-    library_roots: list[str] = [steam_path]
-
-    if os.path.isfile(vdf_path):
-        try:
-            with open(vdf_path, encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    line = line.strip()
-                    # VDF lines look like:  "path"    "E:\\SteamLibrary"
-                    tokens = [t for t in line.split('"') if t.strip()]
-                    if len(tokens) >= 2 and tokens[0].strip().lower() == "path":
-                        lib = tokens[1].strip()
-                        if os.path.isdir(lib) and lib not in library_roots:
-                            library_roots.append(lib)
-        except OSError:
-            pass
-
-
-    # Search each library for the game
-    for lib in library_roots:
-        manifest = os.path.join(lib, "steamapps", f"appmanifest_{STEAM_APP_ID}.acf")
-        if os.path.isfile(manifest):
-            game_dir = os.path.join(lib, "steamapps", "common", GAME_FOLDER_NAME)
-            if os.path.isdir(game_dir):
-                return game_dir
-
-    return None
-
-
 class PatcherApp:
-    """Main GUI window."""
+    """
+    Main GUI window for the patcher app
+
+    Handles user input and displays information while delegating threaded patching actions to the PatcherCore
+    """
 
     def __init__(self, root: tk.Tk, logger: logging.Logger) -> None:
         self.root = root
@@ -189,6 +126,13 @@ class PatcherApp:
         self.root.resizable(False, False)
         self.root.minsize(960, 620)
         self.root.maxsize(960, 620)
+
+        icon_path = os.path.join(os.path.dirname(__file__), "MistServer_101.ico")
+        if os.path.isfile(icon_path):
+            try:
+                self.root.iconbitmap(icon_path)
+            except tk.TclError:
+                self._log.warning("Failed to set icon on this platform: %s", icon_path)
 
         apply_theme(root)
 
@@ -202,7 +146,7 @@ class PatcherApp:
         self._apply_state(AppState.IDLE)
         self._refresh_dir_label()
 
-        log_handler = LogHandler(self, self._cb_log)
+        log_handler = LogHandler(self._cb_log)
         log_handler.setLevel(logging.DEBUG)
         log_handler.setFormatter(logging.Formatter("%(message)s"))
 
@@ -214,11 +158,6 @@ class PatcherApp:
     def _start_worker(self, target) -> None:
         self._worker = threading.Thread(target=target, daemon=True)
         self._worker.start()
-
-
-    # Patcher core carries state from update -> patch
-    def _get_new_core(self) -> PatcherCore:
-        return self._build_core()
 
 
     def _build_ui(self) -> None:
@@ -540,18 +479,15 @@ class PatcherApp:
             if bar:
                 bar.config(bg=PALETTE["bg_widget"])
 
-    # ------------------------------------------------------------------
     # UI update helpers (main thread only)
-    # ------------------------------------------------------------------
-
-    _EXE_REL_PATH = os.path.join("Mist", "Binaries", "Win64", "MistClient-Win64-Shipping.exe")
-
     def _refresh_dir_label(self) -> None:
         path = self._cfg.working_dir
         display = ("\u2026" + path[-30:]) if len(path) > 32 else path
         self._dir_label.config(text=display)
+
         # Update exe-present indicator
-        exe_present = os.path.isfile(os.path.join(path, self._EXE_REL_PATH))
+        exe_path = self._cfg.absolute_exe_path
+        exe_present = os.path.isfile(exe_path)
         if exe_present:
             self._exe_indicator.config(text="\u2714", fg=PALETTE["green"])
         else:
@@ -561,7 +497,7 @@ class PatcherApp:
     def _append_log(self, text: str, tag: str = "") -> None:
         ts = datetime.now().strftime("%H:%M:%S")
         self._log_text.config(state="normal")
-        self._log_text.insert("end", f"[{ts}] ", "dim")
+        self._log_text.insert("end", f"[{ts}] ", "text_dim")
         self._log_text.insert("end", text + "\n", tag if tag else "")
         self._log_text.config(state="disabled")
         self._log_text.see("end")
@@ -574,11 +510,11 @@ class PatcherApp:
     def _set_status(self, text: str, color: str = "white") -> None:
         self._status_var.set(text)
         if color == "red":
-            self._status_strip.config(bg=PALETTE["red"],    fg=PALETTE["text"])
+            self._status_strip.config(bg=PALETTE["red"], fg=PALETTE["text"])
         elif color == "orange":
             self._status_strip.config(bg=PALETTE["orange"], fg=PALETTE["bg_dark"])
         elif color == "green":
-            self._status_strip.config(bg=PALETTE["green"],  fg=PALETTE["bg_dark"])
+            self._status_strip.config(bg=PALETTE["green"], fg=PALETTE["bg_dark"])
         else:
             self._status_strip.config(
                 bg=PALETTE[_STATUS_BG.get(self._state, "accent_dim")],
@@ -597,10 +533,6 @@ class PatcherApp:
     def _cb_status(self, text: str, color: str = "white") -> None:
         self.root.after(0, self._set_status, text, color)
 
-    def _cb_status_log(self, text: str, color: str = "white") -> None:
-        self.root.after(0, self._set_status, text, color)
-        self.root.after(0, self._append_log, text, PALETTE.get(color, ""))
-
     def _cb_log(self, text: str, tag: str) -> None:
         self.root.after(0, self._append_log, text, tag)
 
@@ -611,7 +543,7 @@ class PatcherApp:
         self.root.after(0, self._set_action_progress, value, maximum, label)
 
     # Create the patcher core
-    def _build_core(self) -> PatcherCore:
+    def _build_new_core(self) -> PatcherCore:
         return PatcherCore(
             working_dir=self._cfg.working_dir,
             remote_patch_list=self._cfg.remote_patch_list,
@@ -619,7 +551,6 @@ class PatcherApp:
             net=NetworkClient(build_ssl_context()),
             logger=self._log,
             on_status=self._cb_status,
-            on_log=self._cb_log,
             on_step_progress=self._cb_step,
             on_action_progress=self._cb_action,
             on_patch_list_ready=self._on_patch_list_ready_cb,
@@ -633,7 +564,6 @@ class PatcherApp:
 
         Falls back gracefully on non-Windows platforms or if the game is not found.
         """
-        import sys
         if sys.platform != "win32":
             messagebox.showinfo(
                 "Not supported",
@@ -641,7 +571,7 @@ class PatcherApp:
             )
             return
 
-        found = _find_last_oasis_win32()
+        found = find_last_oasis_win32()
 
         if found:
             self._cfg.working_dir = os.path.normpath(found)
@@ -670,8 +600,8 @@ class PatcherApp:
 
     def _on_check(self) -> None:
         self._apply_state(AppState.RUNNING)
-        self._append_log(_section_message("Starting patch check"), "accent")
-        self._core = self._get_new_core()
+        self._append_log(_log_section_header("Starting patch check"), "accent")
+        self._core = self._build_new_core()
 
         def worker():
             try:
@@ -704,7 +634,7 @@ class PatcherApp:
             return
 
         self._apply_state(AppState.RUNNING)
-        self._append_log(_section_message("Starting patch download"), "accent")
+        self._append_log(_log_section_header("Starting patch download"), "accent")
 
         def worker():
             try:
@@ -729,7 +659,7 @@ class PatcherApp:
             self._append_log("User cancelled current action", "orange")
 
     def _on_play(self) -> None:
-        exe_path = self._cfg.launch_exe_path
+        exe_path = self._cfg.absolute_exe_path
         bin_dir = os.path.normpath(self._cfg.launch_bin_path)
         if not os.path.isfile(exe_path):
             messagebox.showerror(
@@ -763,27 +693,30 @@ class PatcherApp:
             return
 
         self._apply_state(AppState.RUNNING)
-        self._append_log(_section_message("Clearing LOC mod files"), "accent")
+        self._append_log(_log_section_header("Clearing LOC mod files"), "accent")
 
-        core = self._build_core()
+        # Create a patcher core instance that will simply delete all cache files
+        core = self._build_new_core()
 
         # Snapshot the cache at the moment the user confirms
         files_to_clear = list(cache)
 
         def worker():
-            count = core.clear_loc_mods(files_to_clear)
-            msg = f"Cleared {count} mod file(s) of {len(files_to_clear)} tracked LOC mod file(s)."
+            deleted, missed, errored = core.clear_loc_mods(files_to_clear)
+            deleted_msg = f"Cleared {deleted} mod file(s) of {len(files_to_clear)} tracked LOC mod file(s)."
+            self._log.info(deleted_msg)
+            if missed:
+                missed_msg = f"{missed} tracked mod file(s) not found to delete."
+                self._log.warning(missed_msg)
+            if errored:
+                errored_msg = f"Unable to delete {errored} mod file(s)."
+                self._log.error(errored_msg)
             self.root.after(0, lambda: (
-                self._append_log(msg, "green"),
                 self._apply_state(AppState.IDLE),
                 self._cb_status("Please check for updates.", "accent_dim")
             ))
 
         self._start_worker(worker)
-
-    # ------------------------------------------------------------------
-    # PATCH_CACHE callbacks (called from worker threads via core)
-    # ------------------------------------------------------------------
 
     def _on_patch_list_ready_cb(self, file_list: list[str]) -> None:
         """

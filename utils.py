@@ -80,3 +80,70 @@ def resource_path(relative_path: str) -> str:
     """
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, relative_path)
+
+
+# Helper method that identifies the Last Oasis install on a machine
+def find_last_oasis_win32() -> str | None:
+    """
+    Return the Last Oasis game folder path, or None if not found.
+
+    1. Read the Steam install path from the Windows registry
+    2. Enumerate all Steam library folders from libraryfolders.vdf
+    3. In each library, check for the manifest file for app 903950 (Last Oasis)
+        return the steamapps/common/Last Oasis path if it exists on disk.
+    """
+    import winreg
+
+    STEAM_APP_ID = "903950"
+    GAME_FOLDER_NAME = "Last Oasis"
+
+    # Registry locations Steam uses (64-bit and 32-bit views)
+    REG_PATHS = [
+        (winreg.HKEY_LOCAL_MACHINE,
+         r"SOFTWARE\WOW6432Node\Valve\Steam"),
+        (winreg.HKEY_LOCAL_MACHINE,
+         r"SOFTWARE\Valve\Steam"),
+        (winreg.HKEY_CURRENT_USER,
+         r"SOFTWARE\Valve\Steam"),
+    ]
+
+    steam_path: str | None = None
+    for hive, subkey in REG_PATHS:
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                steam_path, _ = winreg.QueryValueEx(key, "InstallPath")
+                break
+        except OSError:
+            continue
+
+    if not steam_path or not os.path.isdir(steam_path):
+        return None
+
+    # Collect all library roots from libraryfolders.vdf
+    vdf_path = os.path.join(steam_path, "steamapps", "libraryfolders.vdf")
+    library_roots: list[str] = [steam_path]
+
+    if os.path.isfile(vdf_path):
+        try:
+            with open(vdf_path, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    # VDF lines look like:  "path"    "E:\\SteamLibrary"
+                    tokens = [t for t in line.split('"') if t.strip()]
+                    if len(tokens) >= 2 and tokens[0].strip().lower() == "path":
+                        lib = tokens[1].strip()
+                        if os.path.isdir(lib) and lib not in library_roots:
+                            library_roots.append(lib)
+        except OSError:
+            pass
+
+
+    # Search each library for the game
+    for lib in library_roots:
+        manifest = os.path.join(lib, "steamapps", f"appmanifest_{STEAM_APP_ID}.acf")
+        if os.path.isfile(manifest):
+            game_dir = os.path.join(lib, "steamapps", "common", GAME_FOLDER_NAME)
+            if os.path.isdir(game_dir):
+                return game_dir
+
+    return None

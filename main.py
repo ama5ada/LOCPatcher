@@ -1,11 +1,11 @@
+"""
+    Application entry, set up logger and GUI
+"""
+
 import tkinter as tk
 
 from logger import setup_logging
 from app import PatcherApp
-
-"""
-    Application entry, set up logger and GUI
-"""
 
 def main() -> None:
     logger = setup_logging()

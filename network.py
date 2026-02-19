@@ -14,8 +14,7 @@ class NetworkClient:
 
     Handles requesting a compressed patch list and a raw byte stream for pak files
 
-    @:parameter
-    ssl_ctx:
+    :param ssl_ctx:
         An SSLContext to use for all requests, can be used later to further secure patching
     """
 
