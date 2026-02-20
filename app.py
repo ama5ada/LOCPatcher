@@ -24,11 +24,11 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Literal
 from core import ActionCancelled, PatcherCore
-from config import PatcherConfig, CONFIG_PATH
-from constants import APP_TITLE, LOG_DIR
-from log_handler import LogHandler
-from network import NetworkClient, build_ssl_context
-from utils import find_last_oasis_win32
+from config.config import PatcherConfig, CONFIG_PATH
+from config.constants import APP_TITLE, LOG_DIR
+from utils.logging.log_handler import LogHandler
+from utils.network import NetworkClient, build_ssl_context
+from utils.utils import find_last_oasis_win32
 
 
 from theme import (

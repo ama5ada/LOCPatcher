@@ -7,15 +7,15 @@ import time
 import urllib.error
 from typing import Callable
 from urllib.parse import urlparse
-from network import NetworkClient
+from utils.network import NetworkClient
 
-from constants import (
+from config.constants import (
     DOWNLOAD_CHUNK,
     MAX_RETRIES,
     RETRY_BASE_DELAY,
 )
 
-from utils import (
+from utils.utils import (
     compute_crc32,
     convert_file_size,
     format_eta,

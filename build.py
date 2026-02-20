@@ -8,9 +8,10 @@ def build():
         "--name", "LOCPatcher",
         "--onedir",
         "--windowed",
-        "--icon", "MistServer_101.ico",
-        "--add-data", "MistServer_101.ico;.",
+        "--icon", "assets/MistServer_101.ico",
+        "--add-data", "assets/MistServer_101.ico;.",
         "--clean",
+        "-y"
     ]
 
     subprocess.run(args, check=True)

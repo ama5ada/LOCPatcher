@@ -4,7 +4,7 @@
 
 import tkinter as tk
 
-from logger import setup_logging
+from utils.logging.logger import setup_logging
 from app import PatcherApp
 
 def main() -> None:

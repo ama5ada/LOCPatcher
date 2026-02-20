@@ -1,17 +1,17 @@
 *
 
 !app.py
-!config.py
-!constants.py
+!config/config.py
+!config/constants.py
 !core.py
-!log_handler.py
-!logger.py
+!utils/logging/log_handler.py
+!utils/logging/logger.py
 !main.py
-!network.py
+!utils/network.py
 !requirements.txt
 !theme.py
-!utils.py
-!MistServer_101.ico
+!utils/utils.py
+!assets/MistServer_101.ico
 !build.py
 
 !.gitignore
