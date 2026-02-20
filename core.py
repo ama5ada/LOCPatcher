@@ -22,8 +22,11 @@ from utils import (
     is_safe_path,
 )
 
-# Exception used when a user clicks the cancel button
+
 class ActionCancelled(Exception):
+    """
+    Exception raised when an action was cancelled by the user clicking the cancel button.
+    """
     pass
 
 class PatcherCore:

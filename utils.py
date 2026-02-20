@@ -71,17 +71,6 @@ def compute_crc32(filepath: str) -> str:
     return "%08X" % (crc & 0xFFFFFFFF)
 
 
-def resource_path(relative_path: str) -> str:
-    """
-    Resolve a path relative to the application root
-
-    Works correctly both when running from source and when frozen by PyInstaller
-    (temporary data is unpacked into sys._MEIPASS)
-    """
-    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, relative_path)
-
-
 # Helper method that identifies the Last Oasis install on a machine
 def find_last_oasis_win32() -> str | None:
     """
