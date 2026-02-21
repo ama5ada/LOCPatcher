@@ -5,7 +5,8 @@ import tempfile
 import threading
 import time
 import urllib.error
-from typing import Callable
+from dataclasses import dataclass
+from typing import Callable, Optional
 from urllib.parse import urlparse
 from utils.network import NetworkClient
 
@@ -20,7 +21,17 @@ from utils.utils import (
     convert_file_size,
     format_eta,
     is_safe_path,
+    SpeedTracker
 )
+
+
+@dataclass
+class FileInfo:
+    """
+    Quick class to hold file info as parsed from PatchList
+    """
+    hash: str
+    size: int
 
 
 class ActionCancelled(Exception):
@@ -44,8 +55,8 @@ class PatcherCore:
         on_status: Callable[[str, str], None],
         on_step_progress: Callable[[int, int, str], None],
         on_action_progress: Callable[[int, int, str], None],
-        on_patch_list_ready: Callable[[list], None] | None = None,
-        on_files_deleted: Callable[[list], None] | None = None,
+        on_patch_list_ready: Callable[[list[str]], None] | None = None,
+        on_files_deleted: Callable[[list[str]], None] | None = None,
     ) -> None:
         self.working_dir = os.path.normpath(working_dir)
         self.remote_patch_list = remote_patch_list
@@ -58,7 +69,7 @@ class PatcherCore:
         self._on_patch_list_ready = on_patch_list_ready
         self._on_files_deleted = on_files_deleted
 
-        self.updated_file_map: dict[str, dict] = {}
+        self.updated_file_map: dict[str, FileInfo] = {}
         self.outdated_file_list: list[str] = []
         self._cancel_event = threading.Event()
 
@@ -120,7 +131,7 @@ class PatcherCore:
             return False
 
 
-    def _parse_patch_list(self, content: str) -> dict[str, dict]:
+    def _parse_patch_list(self, content: str) -> dict[str, FileInfo]:
         """
         Parse the patch manifest text into a file-map dict.
 
@@ -130,7 +141,7 @@ class PatcherCore:
 
         Malformed lines are logged and skipped.
         """
-        file_map: dict[str, dict] = {}
+        file_map: dict[str, FileInfo] = {}
         for line in content.splitlines():
             line = line.strip()
             if not line:
@@ -141,7 +152,7 @@ class PatcherCore:
                 continue
             path, file_hash, size_str = parts
             try:
-                file_map[path] = {"hash": file_hash, "size": int(size_str)}
+                file_map[path] = FileInfo(hash=file_hash, size=int(size_str))
             except ValueError:
                 self._log.warning("Invalid size in patch list line: %r", line)
         return file_map
@@ -221,14 +232,14 @@ class PatcherCore:
         local_path = os.path.join(self.working_dir, key)
 
         local_size = os.stat(local_path).st_size
-        if local_size != entry["size"]:
+        if local_size != entry.size:
             self._log.debug(
-                "Size mismatch %s: local=%d remote=%d", key, local_size, entry["size"]
+                "Size mismatch %s: local=%d remote=%d", key, local_size, entry.size
             )
             return False
 
         local_crc = compute_crc32(local_path)
-        remote_crc = entry["hash"].upper()
+        remote_crc = entry.hash.upper()
         if local_crc != remote_crc:
             self._log.debug(
                 "CRC mismatch %s: local=%s remote=%s", key, local_crc, remote_crc
@@ -264,9 +275,9 @@ class PatcherCore:
         if total_files == 0:
             return True
 
-        total_bytes = sum(self.updated_file_map[f]["size"] for f in self.outdated_file_list)
+        total_bytes = sum(self.updated_file_map[f].size for f in self.outdated_file_list)
         downloaded_bytes = 0
-        total_tracker = _SpeedTracker()
+        total_tracker = SpeedTracker()
         all_ok = True
 
         self._on_status(f"Downloading {total_files} file(s) — {convert_file_size(total_bytes)} total", "white")
@@ -313,7 +324,7 @@ class PatcherCore:
         return all_ok
 
     def _download_file(self, key: str, already_downloaded: int, total_bytes: int, file_idx: int,
-                       total_files: int, total_tracker) -> int:
+                       total_files: int, total_tracker: SpeedTracker) -> int:
         """
         Download the file to a temp path, rename it into place
 
@@ -327,17 +338,20 @@ class PatcherCore:
             raise ValueError(f"Directory traversal blocked: {key}")
 
         url = self.remote_host + key
-        expected = self.updated_file_map[key]["size"]
+        expected = self.updated_file_map[key].size
         file_name = key.split("/")[-1]
 
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+
+        tmp_fd: Optional[int]
+        tmp_path: Optional[str]
 
         tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(dest_path))
         try:
             with self._net.stream_binary(url) as resp, os.fdopen(tmp_fd, "wb") as out:
                 tmp_fd = None
                 written = 0
-                speed_tracker = _SpeedTracker()
+                speed_tracker = SpeedTracker()
 
                 while True:
                     self._check_cancelled()
@@ -435,30 +449,3 @@ class PatcherCore:
 
         return deleted, missed, error
 
-
-class _SpeedTracker:
-    """
-    Rolling bandwidth estimator helper class
-
-    Each download creates an instance which knows when the download began and when an update should occur
-    """
-
-    def __init__(self, updated_interval: float = 0.5) -> None:
-        self._updated_interval = updated_interval
-        self._start = time.monotonic()
-        self._last_time = self._start
-        self._speed: float = 0.0
-
-    def update(self, total_written: int) -> float:
-        """
-        Bandwidth estimate method that updates based on the bytes downloaded so far
-
-        :param total_written: Number of bytes downloaded so far
-        :return: Speed estimate of file download over entire download lifetime
-        """
-        now = time.monotonic()
-        elapsed = now - self._last_time
-        if elapsed >= self._updated_interval:
-            self._speed = total_written / (now - self._start)
-            self._last_time = now
-        return self._speed

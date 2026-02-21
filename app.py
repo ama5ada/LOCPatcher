@@ -22,7 +22,7 @@ from enum import Enum, auto
 from tkinter import filedialog, messagebox
 import tkinter as tk
 from tkinter import ttk
-from typing import Literal
+from typing import Literal, Callable
 from core import ActionCancelled, PatcherCore
 from config.config import PatcherConfig, CONFIG_PATH
 from config.constants import APP_TITLE, LOG_DIR
@@ -106,7 +106,7 @@ _BUTTON_HIGHLIGHT: dict[AppButton, str] = {
 
 
 # Border log messages with dashes
-def _log_section_header(content) -> str:
+def _log_section_header(content: str) -> str:
     return "\u2500\u2500\u2500 " + content + " \u2500\u2500\u2500"
 
 
@@ -130,7 +130,8 @@ class PatcherApp:
         icon_path = os.path.join(os.path.dirname(__file__), "MistServer_101.ico")
         if os.path.isfile(icon_path):
             try:
-                self.root.iconbitmap(icon_path)
+                # Choosing to ignore typing on this call rather than installing stubs
+                self.root.iconbitmap(icon_path) # type: ignore[no-untyped-call]
             except tk.TclError:
                 self._log.warning("Failed to set icon on this platform: %s", icon_path)
 
@@ -155,9 +156,13 @@ class PatcherApp:
 
 
     # Worker threads so UI doesn't freeze
-    def _start_worker(self, target) -> None:
+    def _start_worker(self, target: Callable[[], None]) -> None:
         self._worker = threading.Thread(target=target, daemon=True)
         self._worker.start()
+
+
+    def _schedule_update(self, callback: Callable[[], None]) -> None:
+        self.root.after(0, callback)
 
 
     def _build_ui(self) -> None:
@@ -393,7 +398,7 @@ class PatcherApp:
 
     # Left column buttons that share similar behavior
     def _make_button(self, parent: tk.Frame, key: AppButton, label: str,
-        cmd, tooltip: str = "", fg_key: str = "accent", active_bg_key: str = "accent_dim") -> tk.Button:
+        cmd: Callable[[], None], tooltip: str = "", fg_key: str = "accent", active_bg_key: str = "accent_dim") -> tk.Button:
 
         """
         Full-width button with a 3px left accent bar that helps indicate a button is active
@@ -428,7 +433,7 @@ class PatcherApp:
         return btn
 
 
-    def _make_log_window_button(self, parent: tk.Frame, key: AppButton, label: str, cmd, side:
+    def _make_log_window_button(self, parent: tk.Frame, key: AppButton, label: str, cmd: Callable[[], None], side:
         Literal["left", "right", "top", "bottom"] = "right", padx: int | tuple[int, int] = 0) -> tk.Button:
 
         btn = tk.Button(parent, text=label, command=cmd, bg=PALETTE["sky_dim"], fg=PALETTE["text"], font=FONT_SMALL,
@@ -603,8 +608,11 @@ class PatcherApp:
         self._append_log(_log_section_header("Starting patch check"), "accent")
         self._core = self._build_new_core()
 
-        def worker():
+        def worker() -> None:
             try:
+                if self._core is None:
+                    raise RuntimeError("PatcherCore was not initialized")
+
                 ok = self._core.check_for_updates()
                 if ok and not self._core.cancelled():
                     self._core.check_local_files()
@@ -612,20 +620,26 @@ class PatcherApp:
                     msg = (f"Check complete \u2014 {count} file(s) need updating." if count
                         else "Check complete \u2014 everything up to date!")
                     next_state = AppState.NEEDS_PATCH if count else AppState.READY_TO_PLAY
-                    self.root.after(0, lambda: (
-                        self._append_log(msg, "orange" if count else "green"),
-                        self._apply_state(next_state),
-                    ))
+
+                    def update_gui() -> None:
+                        self._append_log(msg, "orange" if count else "green")
+                        self._apply_state(next_state)
+
+                    self._schedule_update(update_gui)
+
                 else:
-                    self.root.after(0, lambda: (
-                        self._append_log("Check failed \u2014 see log for details.", "red"),
-                        self._apply_state(AppState.IDLE),
-                    ))
+                    def update_gui() -> None:
+                        self._append_log("Check failed \u2014 see log for details.", "red")
+                        self._apply_state(AppState.IDLE)
+
+                    self._schedule_update(update_gui)
             except ActionCancelled:
-                self.root.after(0, lambda: (
-                    self._cb_status("Check cancelled by user.", "orange"),
-                    self._apply_state(AppState.IDLE),
-                ))
+                def update_gui() -> None:
+                    self._cb_status("Check cancelled by user.", "orange")
+                    self._apply_state(AppState.IDLE)
+
+                self._schedule_update(update_gui)
+
         self._start_worker(worker)
 
     def _on_patch(self) -> None:
@@ -636,20 +650,26 @@ class PatcherApp:
         self._apply_state(AppState.RUNNING)
         self._append_log(_log_section_header("Starting patch download"), "accent")
 
-        def worker():
+        def worker() -> None:
             try:
+                if self._core is None:
+                    raise RuntimeError("PatcherCore was not initialized")
+
                 ok = self._core.download_new_files()
                 msg = ("Patch complete \u2014 all files up to date!" if ok
                         else "Patch finished with errors \u2014 see log.")
-                self.root.after(0, lambda: (
-                    self._append_log(msg, "green" if ok else "red"),
-                    self._apply_state(AppState.READY_TO_PLAY if ok else AppState.NEEDS_PATCH),
-                ))
+
+                def update_gui() -> None:
+                    self._append_log(msg, "green" if ok else "red")
+                    self._apply_state(AppState.READY_TO_PLAY if ok else AppState.NEEDS_PATCH)
+
+                self._schedule_update(update_gui)
             except ActionCancelled:
-                self.root.after(0, lambda: (
-                    self._cb_status("Patch cancelled by user.", "orange"),
-                    self._apply_state(AppState.IDLE),
-                ))
+                def update_gui() -> None:
+                    self._cb_status("Patch cancelled by user.", "orange")
+                    self._apply_state(AppState.IDLE)
+
+                self._schedule_update(update_gui)
 
         self._start_worker(worker)
 
@@ -701,7 +721,10 @@ class PatcherApp:
         # Snapshot the cache at the moment the user confirms
         files_to_clear = list(cache)
 
-        def worker():
+        def worker() -> None:
+            if core is None:
+                raise RuntimeError("PatcherCore was not initialized")
+
             deleted, missed, errored = core.clear_loc_mods(files_to_clear)
             deleted_msg = f"Cleared {deleted} mod file(s) of {len(files_to_clear)} tracked LOC mod file(s)."
             self._log.info(deleted_msg)
@@ -711,10 +734,12 @@ class PatcherApp:
             if errored:
                 errored_msg = f"Unable to delete {errored} mod file(s)."
                 self._log.error(errored_msg)
-            self.root.after(0, lambda: (
-                self._apply_state(AppState.IDLE),
+
+            def update_gui() -> None:
+                self._apply_state(AppState.IDLE)
                 self._cb_status("Please check for updates.", "accent_dim")
-            ))
+
+            self._schedule_update(update_gui)
 
         self._start_worker(worker)
 

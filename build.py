@@ -1,7 +1,7 @@
 import subprocess
 import sys
 
-def build():
+def build() -> None:
     args = [
         sys.executable, "-m", "PyInstaller",
         "main.py",

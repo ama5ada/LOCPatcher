@@ -1,10 +1,11 @@
 import gzip
+import http.client
 import ssl
 import urllib.error
 import urllib.request
 import zlib
 from contextlib import contextmanager
-from typing import Generator
+from typing import Generator, Iterator
 
 from config.constants import REQUEST_TIMEOUT, USER_AGENT
 
@@ -25,7 +26,7 @@ class NetworkClient:
 
 
     @staticmethod
-    def _check_status(url: str, resp) -> None:
+    def _check_status(url: str, resp: http.client.HTTPResponse) -> None:
         # Bad response
         if resp.status != 200:
             raise urllib.error.HTTPError(url, resp.status,
@@ -51,13 +52,13 @@ class NetworkClient:
 
 
     @staticmethod
-    def _decode_response(resp) -> str:
+    def _decode_response(resp: http.client.HTTPResponse) -> str:
         """
         Read raw bytes from response and decode to UTF-8.
 
         Handle gzip and deflate manually because Accept-Encoding request header is set explicitly.
         """
-        raw = resp.read()
+        raw: bytes = resp.read()
         encoding = resp.headers.get("Content-Encoding", "").lower()
         if encoding == "gzip":
             raw = gzip.decompress(raw)
@@ -67,14 +68,15 @@ class NetworkClient:
 
 
     @contextmanager
-    def stream_binary(self, url: str) -> Generator:
+    def stream_binary(self, url: str) -> Iterator[http.client.HTTPResponse]:
         """
         Context manager that yields an open HTTP response for streaming.
 
+        Implementing Context Manager ensures the HTTP connection is automatically closed, meaning the consuming code is
+        not concerned with managing connection cleanup manually if an exception is raised.
+
         Request raw uncompressed bytes
-
         .pak files don't benefit from compression
-
         Content-Length is consistent with expected file size stored in the patch manifest.
         """
         req = urllib.request.Request(url, headers={"User-Agent": self._ua})

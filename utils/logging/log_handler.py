@@ -1,4 +1,6 @@
 import logging
+from typing import Callable
+
 
 class LogHandler(logging.Handler):
     """
@@ -7,7 +9,7 @@ class LogHandler(logging.Handler):
     Widget text can be dumped to a file via EXPORT LOG to easily share the exact logs associated with a problem
     """
 
-    def __init__(self, log_cb):
+    def __init__(self, log_cb: Callable[[str, str], None]) -> None:
         super().__init__()
         self.log_callback = log_cb
 

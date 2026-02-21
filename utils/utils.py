@@ -1,7 +1,8 @@
 import math
 import os
-import sys
+import time
 import zlib
+from collections import deque
 from pathlib import Path
 
 
@@ -136,3 +137,50 @@ def find_last_oasis_win32() -> str | None:
                 return game_dir
 
     return None
+
+
+class SpeedTracker:
+    """
+    Rolling bandwidth estimator helper class
+
+    Each download creates an instance which knows when the download began and when an update should occur
+    """
+
+    def __init__(self, updated_interval: float = 0.5, intervals_per_window: int = 10) -> None:
+        self._updated_interval = updated_interval
+        self._intervals_per_window = intervals_per_window
+
+        self._start = time.monotonic()
+        self._last_time = self._start
+        self._speed: float = 0.0
+
+        self._data_per_interval = deque([])
+        self._interval_timestamps = deque([])
+        self._interval_sum = 0
+        self._last_total = 0
+
+    def update(self, total_written: int) -> float:
+        """
+        Bandwidth estimate method that updates based on the bytes downloaded so far
+
+        :param total_written: Number of bytes downloaded so far
+        :return: Speed estimate of file download over entire download lifetime
+        """
+        now = time.monotonic()
+        elapsed = now - self._last_time
+        if elapsed >= self._updated_interval:
+            written_in_interval = total_written - self._last_total
+            self._interval_sum += written_in_interval
+            self._last_total = total_written
+            self._data_per_interval.append(written_in_interval)
+            self._interval_timestamps.append(now)
+
+            last_time = self._start
+
+            if len(self._data_per_interval) > self._intervals_per_window:
+                self._interval_sum -= self._data_per_interval.popleft()
+                last_time = self._interval_timestamps.popleft()
+
+            self._speed = self._interval_sum / (now - last_time)
+            self._last_time = now
+        return self._speed
