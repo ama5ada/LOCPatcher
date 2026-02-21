@@ -4,11 +4,14 @@
 !config
 !config/config.py
 !config/constants.py
+!config/__init__.py
 !core.py
 !utils
 !utils/utils.py
 !utils/network.py
+!utils/__init__.py
 !utils/logging
+!utils/logging/__init__.py
 !utils/logging/log_handler.py
 !utils/logging/logger.py
 !main.py
