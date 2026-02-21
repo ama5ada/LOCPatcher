@@ -6,7 +6,7 @@ import threading
 import time
 import urllib.error
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 from urllib.parse import urlparse
 from utils.network import NetworkClient
 
@@ -343,8 +343,8 @@ class PatcherCore:
 
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
 
-        tmp_fd: Optional[int]
-        tmp_path: Optional[str]
+        tmp_fd: int | None
+        tmp_path: str | None
 
         tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(dest_path))
         try:

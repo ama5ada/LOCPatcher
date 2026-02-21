@@ -722,9 +722,6 @@ class PatcherApp:
         files_to_clear = list(cache)
 
         def worker() -> None:
-            if core is None:
-                raise RuntimeError("PatcherCore was not initialized")
-
             deleted, missed, errored = core.clear_loc_mods(files_to_clear)
             deleted_msg = f"Cleared {deleted} mod file(s) of {len(files_to_clear)} tracked LOC mod file(s)."
             self._log.info(deleted_msg)

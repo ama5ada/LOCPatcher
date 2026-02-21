@@ -1,7 +1,6 @@
 """
 Visual constants, ttk style configuration, Tooltip helper widget
 """
-import tkinter
 import tkinter as tk
 from tkinter import ttk
 from typing import Optional
@@ -87,7 +86,7 @@ class Tooltip:
         widget.bind("<Enter>", self._show)
         widget.bind("<Leave>", self._hide)
 
-    def _show(self, _event: Optional[tkinter.Event]=None) -> None:
+    def _show(self, _event: Optional[tk.Event]=None) -> None:
         x = self._widget.winfo_rootx() + 20
         y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
         self._tip = tk.Toplevel(self._widget)
@@ -105,7 +104,7 @@ class Tooltip:
             pady=3,
         ).pack()
 
-    def _hide(self, _event: Optional[tkinter.Event]=None) -> None:
+    def _hide(self, _event: Optional[tk.Event]=None) -> None:
         if self._tip:
             self._tip.destroy()
             self._tip = None

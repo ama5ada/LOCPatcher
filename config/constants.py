@@ -15,7 +15,7 @@ DOWNLOAD_CHUNK = 131_072
 APP_TITLE = "Last Oasis Classic Launcher"
 APP_NAME = "LOCPatcher"
 APP_AUTHOR = "LastOasisClassic"
-LOG_DIR = "../patcher_logs"
+LOG_DIR = "patcher_logs"
 # 5 MB
 MAX_LOG_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
