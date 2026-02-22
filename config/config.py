@@ -7,9 +7,7 @@ from platformdirs import user_data_dir
 
 from config.constants import (
     APP_AUTHOR,
-    APP_NAME,
-    REMOTE_HOST,
-    REMOTE_PATCH_LIST,
+    APP_NAME
 )
 
 
@@ -51,8 +49,6 @@ class PatcherConfig:
     """
 
     working_dir: str = field(default_factory=os.getcwd)
-    remote_patch_list: str = REMOTE_PATCH_LIST
-    remote_host: str = REMOTE_HOST
     launch_bin_dir: str  = _DEFAULT_BIN_DIR
     launch_exe_name: str = _DEFAULT_EXE_NAME
     patch_cache: list[str] = field(default_factory=list)
@@ -84,8 +80,7 @@ class PatcherConfig:
             except configparser.Error:
                 pass
 
-        patcher_section  = cfg["patcher"]  if cfg.has_section("patcher")  else {}
-        launcher_section = cfg["launcher"] if cfg.has_section("launcher") else {}
+        patcher_section = cfg["patcher"]  if cfg.has_section("patcher")  else {}
 
         working_dir = patcher_section.get("working_dir", defaults.working_dir)
         working_dir = os.path.normpath(working_dir)
@@ -96,12 +91,10 @@ class PatcherConfig:
         patch_cache = [f.strip() for f in raw_files.splitlines() if f.strip()]
 
         return cls(
-            working_dir=working_dir,
-            remote_patch_list=REMOTE_PATCH_LIST,
-            remote_host=REMOTE_HOST,
-            launch_bin_dir=launcher_section.get("bin_dir", defaults.launch_bin_dir),
-            launch_exe_name=launcher_section.get("exe_name", defaults.launch_exe_name),
-            patch_cache=patch_cache,
+            working_dir = working_dir,
+            launch_bin_dir = patcher_section.get("bin_dir", defaults.launch_bin_dir),
+            launch_exe_name = patcher_section.get("exe_name", defaults.launch_exe_name),
+            patch_cache = patch_cache,
         )
 
 

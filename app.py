@@ -25,7 +25,9 @@ from tkinter import ttk
 from typing import Literal, Callable
 from core import ActionCancelled, PatcherCore
 from config.config import PatcherConfig, CONFIG_PATH
-from config.constants import APP_TITLE, LOG_DIR
+from config.constants import (
+    APP_TITLE, LOG_DIR
+)
 from utils.logging.log_handler import LogHandler
 from utils.network import NetworkClient, build_ssl_context
 from utils.utils import find_last_oasis_win32
@@ -82,7 +84,7 @@ _STATUS_BG: dict[AppState, str] = {
     AppState.IDLE: "accent_dim",
     AppState.RUNNING: "sky_dim",
     AppState.NEEDS_PATCH: "orange",
-    AppState.READY_TO_PLAY: "green",
+    AppState.READY_TO_PLAY: "green"
 }
 
 
@@ -91,7 +93,7 @@ _STATUS_FG: dict[AppState, str] = {
     AppState.IDLE: "text",
     AppState.RUNNING: "text",
     AppState.NEEDS_PATCH: "bg_dark",
-    AppState.READY_TO_PLAY: "bg_dark",
+    AppState.READY_TO_PLAY: "bg_dark"
 }
 
 
@@ -127,13 +129,18 @@ class PatcherApp:
         self.root.minsize(960, 620)
         self.root.maxsize(960, 620)
 
-        icon_path = os.path.join(os.path.dirname(__file__), "MistServer_101.ico")
-        if os.path.isfile(icon_path):
+        icon_path = None
+        if sys.platform == "win32":
+            icon_path = os.path.join(os.path.dirname(__file__), "assets/MistServer_101.ico")
+
+        if icon_path and os.path.isfile(icon_path):
             try:
                 # Choosing to ignore typing on this call rather than installing stubs
                 self.root.iconbitmap(icon_path) # type: ignore[no-untyped-call]
             except tk.TclError:
                 self._log.warning("Failed to set icon on this platform: %s", icon_path)
+        else:
+            self._log.debug("Icon path was not set, using default icon")
 
         apply_theme(root)
 
@@ -157,7 +164,25 @@ class PatcherApp:
 
     # Worker threads so UI doesn't freeze
     def _start_worker(self, target: Callable[[], None]) -> None:
-        self._worker = threading.Thread(target=target, daemon=True)
+        def guarded_worker() -> None:
+            try:
+                target()
+            except ActionCancelled:
+                def update_gui() -> None:
+                    self._cb_status("Action cancelled by user.", "orange")
+                    self._apply_state(AppState.IDLE)
+
+                self._schedule_update(update_gui)
+            except Exception as exc:
+                self._log.exception(f"Unexpected error in worker thread {exc}")
+                def update_gui() -> None:
+                    self._cb_status("Unexpected error — see log.", "red")
+                    self._apply_state(AppState.IDLE)
+
+                self._schedule_update(update_gui)
+
+
+        self._worker = threading.Thread(target=guarded_worker, daemon=True)
         self._worker.start()
 
 
@@ -551,8 +576,6 @@ class PatcherApp:
     def _build_new_core(self) -> PatcherCore:
         return PatcherCore(
             working_dir=self._cfg.working_dir,
-            remote_patch_list=self._cfg.remote_patch_list,
-            remote_host=self._cfg.remote_host,
             net=NetworkClient(build_ssl_context()),
             logger=self._log,
             on_status=self._cb_status,
@@ -609,33 +632,26 @@ class PatcherApp:
         self._core = self._build_new_core()
 
         def worker() -> None:
-            try:
-                if self._core is None:
-                    raise RuntimeError("PatcherCore was not initialized")
+            if self._core is None:
+                raise RuntimeError("PatcherCore was not initialized")
 
-                ok = self._core.check_for_updates()
-                if ok and not self._core.cancelled():
-                    self._core.check_local_files()
-                    count = len(self._core.outdated_file_list)
-                    msg = (f"Check complete \u2014 {count} file(s) need updating." if count
-                        else "Check complete \u2014 everything up to date!")
-                    next_state = AppState.NEEDS_PATCH if count else AppState.READY_TO_PLAY
+            ok = self._core.check_for_updates()
+            if ok and not self._core.cancelled():
+                self._core.check_local_files()
+                count = len(self._core.outdated_file_list)
+                msg = (f"Check complete \u2014 {count} file(s) need updating." if count
+                    else "Check complete \u2014 everything up to date!")
+                next_state = AppState.NEEDS_PATCH if count else AppState.READY_TO_PLAY
 
-                    def update_gui() -> None:
-                        self._append_log(msg, "orange" if count else "green")
-                        self._apply_state(next_state)
-
-                    self._schedule_update(update_gui)
-
-                else:
-                    def update_gui() -> None:
-                        self._append_log("Check failed \u2014 see log for details.", "red")
-                        self._apply_state(AppState.IDLE)
-
-                    self._schedule_update(update_gui)
-            except ActionCancelled:
                 def update_gui() -> None:
-                    self._cb_status("Check cancelled by user.", "orange")
+                    self._append_log(msg, "orange" if count else "green")
+                    self._apply_state(next_state)
+
+                self._schedule_update(update_gui)
+
+            else:
+                def update_gui() -> None:
+                    self._append_log("Check failed \u2014 see log for details.", "red")
                     self._apply_state(AppState.IDLE)
 
                 self._schedule_update(update_gui)
@@ -651,25 +667,18 @@ class PatcherApp:
         self._append_log(_log_section_header("Starting patch download"), "accent")
 
         def worker() -> None:
-            try:
-                if self._core is None:
-                    raise RuntimeError("PatcherCore was not initialized")
+            if self._core is None:
+                raise RuntimeError("PatcherCore was not initialized")
 
-                ok = self._core.download_new_files()
-                msg = ("Patch complete \u2014 all files up to date!" if ok
-                        else "Patch finished with errors \u2014 see log.")
+            ok = self._core.download_new_files()
+            msg = ("Patch complete \u2014 all files up to date!" if ok
+                    else "Patch finished with errors \u2014 see log.")
 
-                def update_gui() -> None:
-                    self._append_log(msg, "green" if ok else "red")
-                    self._apply_state(AppState.READY_TO_PLAY if ok else AppState.NEEDS_PATCH)
+            def update_gui() -> None:
+                self._append_log(msg, "green" if ok else "red")
+                self._apply_state(AppState.READY_TO_PLAY if ok else AppState.NEEDS_PATCH)
 
-                self._schedule_update(update_gui)
-            except ActionCancelled:
-                def update_gui() -> None:
-                    self._cb_status("Patch cancelled by user.", "orange")
-                    self._apply_state(AppState.IDLE)
-
-                self._schedule_update(update_gui)
+            self._schedule_update(update_gui)
 
         self._start_worker(worker)
 
@@ -712,29 +721,38 @@ class PatcherApp:
                                    "from your game folder.\n\nContinue?"):
             return
 
-        self._apply_state(AppState.RUNNING)
         self._append_log(_log_section_header("Clearing LOC mod files"), "accent")
 
-        # Create a patcher core instance that will simply delete all cache files
-        core = self._build_new_core()
+        # Fresh patcher core instances to delete all the cache files
+        self._core = self._build_new_core()
+
+        self._apply_state(AppState.RUNNING)
 
         # Snapshot the cache at the moment the user confirms
         files_to_clear = list(cache)
 
         def worker() -> None:
-            deleted, missed, errored = core.clear_loc_mods(files_to_clear)
+            if self._core is None:
+                raise RuntimeError("PatcherCore was not initialized")
+
+            deleted, missed, errored = self._core.clear_loc_mods(files_to_clear)
             deleted_msg = f"Cleared {deleted} mod file(s) of {len(files_to_clear)} tracked LOC mod file(s)."
             self._log.info(deleted_msg)
+
             if missed:
                 missed_msg = f"{missed} tracked mod file(s) not found to delete."
                 self._log.warning(missed_msg)
+
             if errored:
                 errored_msg = f"Unable to delete {errored} mod file(s)."
                 self._log.error(errored_msg)
+                self._cb_status(f"Unable to delete {errored} mod files. Please close the game and try again",
+                                    "orange")
+            else:
+                self._cb_status("Mods cleared successfully.", "green")
 
             def update_gui() -> None:
                 self._apply_state(AppState.IDLE)
-                self._cb_status("Please check for updates.", "accent_dim")
 
             self._schedule_update(update_gui)
 

@@ -6,6 +6,7 @@ import threading
 import time
 import urllib.error
 from dataclasses import dataclass
+from http.client import HTTPSConnection
 from typing import Callable
 from urllib.parse import urlparse
 from utils.network import NetworkClient
@@ -14,6 +15,7 @@ from config.constants import (
     DOWNLOAD_CHUNK,
     MAX_RETRIES,
     RETRY_BASE_DELAY,
+    REMOTE_PATCH_LIST
 )
 
 from utils.utils import (
@@ -51,16 +53,14 @@ class PatcherCore:
     All progress and status updates to the UI are executed through callbacks so the updates are thread safe
     """
 
-    def __init__(self, working_dir: str, remote_patch_list: str, remote_host: str, net: NetworkClient, logger: logging.Logger,
+    def __init__(self, working_dir: str, net: NetworkClient, logger: logging.Logger,
         on_status: Callable[[str, str], None],
         on_step_progress: Callable[[int, int, str], None],
         on_action_progress: Callable[[int, int, str], None],
         on_patch_list_ready: Callable[[list[str]], None] | None = None,
         on_files_deleted: Callable[[list[str]], None] | None = None,
     ) -> None:
-        self.working_dir = os.path.normpath(working_dir)
-        self.remote_patch_list = remote_patch_list
-        self.remote_host = remote_host
+        self._working_dir = os.path.normpath(working_dir)
         self._net = net
         self._log = logger
         self._on_status = on_status
@@ -69,7 +69,7 @@ class PatcherCore:
         self._on_patch_list_ready = on_patch_list_ready
         self._on_files_deleted = on_files_deleted
 
-        self.updated_file_map: dict[str, FileInfo] = {}
+        self._updated_file_map: dict[str, FileInfo] = {}
         self.outdated_file_list: list[str] = []
         self._cancel_event = threading.Event()
 
@@ -88,21 +88,21 @@ class PatcherCore:
 
 
     def check_for_updates(self) -> bool:
-        parsed = urlparse(self.remote_patch_list)
+        parsed = urlparse(REMOTE_PATCH_LIST)
         short_url = parsed.netloc + parsed.path
 
         self._on_status(f"Fetching patch list from {short_url}", "white")
         self._on_action(0, 3, "Step 1/3 — Fetching patch list")
-        self._log.info("Fetching patch list: %s", self.remote_patch_list)
+        self._log.info("Fetching patch list: %s", REMOTE_PATCH_LIST)
 
         try:
-            content = self._net.fetch_text(self.remote_patch_list)
+            content = self._net.fetch_text()
 
             self._check_cancelled()
 
-            self.updated_file_map = self._parse_patch_list(content)
+            self._updated_file_map = self._parse_patch_list(content)
 
-            count = len(self.updated_file_map)
+            count = len(self._updated_file_map)
 
             self._log.info("Patch list loaded: %d files", count)
             self._on_status(f"Patch list OK — {count} files tracked", "green")
@@ -110,7 +110,7 @@ class PatcherCore:
 
             # Notify caller so it can persist all known file paths to PATCH_CACHE
             if self._on_patch_list_ready:
-                self._on_patch_list_ready(list(self.updated_file_map.keys()))
+                self._on_patch_list_ready(list(self._updated_file_map.keys()))
 
             return True
 
@@ -168,19 +168,19 @@ class PatcherCore:
 
         self._check_cancelled()
 
-        total = len(self.updated_file_map)
+        total = len(self._updated_file_map)
         self._on_status("Checking local files…", "white")
         self._on_action(1, 3, "Step 2/3 — Checking local files")
-        self._log.info("Scanning %d paths under: %s", total, self.working_dir)
+        self._log.info("Scanning %d paths under: %s", total, self._working_dir)
 
         present: list[str] = []
         self.outdated_file_list = []
 
-        for idx, key in enumerate(self.updated_file_map, start=1):
+        for idx, key in enumerate(self._updated_file_map, start=1):
             self._check_cancelled()
 
             self._on_step(idx, total, f"Scanning {idx}/{total}: {key.split('/')[-1]}")
-            if os.path.isfile(os.path.join(self.working_dir, key)):
+            if os.path.isfile(os.path.join(self._working_dir, key)):
                 present.append(key)
             else:
                 self._log.debug("Missing: %s", key)
@@ -228,8 +228,8 @@ class PatcherCore:
         :param key: Name of file
         :return: True/False if the file CRC matches the patch list
         """
-        entry = self.updated_file_map[key]
-        local_path = os.path.join(self.working_dir, key)
+        entry = self._updated_file_map[key]
+        local_path = os.path.join(self._working_dir, key)
 
         local_size = os.stat(local_path).st_size
         if local_size != entry.size:
@@ -275,13 +275,15 @@ class PatcherCore:
         if total_files == 0:
             return True
 
-        total_bytes = sum(self.updated_file_map[f].size for f in self.outdated_file_list)
+        total_bytes = sum(self._updated_file_map[f].size for f in self.outdated_file_list)
         downloaded_bytes = 0
         total_tracker = SpeedTracker()
         all_ok = True
 
         self._on_status(f"Downloading {total_files} file(s) — {convert_file_size(total_bytes)} total", "white")
         self._log.info("Starting download: %d files, %s total", total_files, convert_file_size(total_bytes))
+
+        conn = self._net.open_connection()
 
         for file_idx, key in enumerate(self.outdated_file_list, start=1):
             self._check_cancelled()
@@ -297,7 +299,7 @@ class PatcherCore:
                 self._on_status(f"[{file_idx}/{total_files}] {file_name}{attempt_suffix}", "white")
 
                 try:
-                    written = self._download_file(key, downloaded_bytes, total_bytes, file_idx, total_files, total_tracker)
+                    written = self._download_file(key, conn, downloaded_bytes, total_bytes, file_idx, total_files, total_tracker)
                     if self._validate_file(key):
                         downloaded_bytes += written
                         self._log.info("Downloaded OK: %s", key)
@@ -323,7 +325,7 @@ class PatcherCore:
             self._on_status("Patch complete. Ready to play!", "green")
         return all_ok
 
-    def _download_file(self, key: str, already_downloaded: int, total_bytes: int, file_idx: int,
+    def _download_file(self, key: str, conn: HTTPSConnection,already_downloaded: int, total_bytes: int, file_idx: int,
                        total_files: int, total_tracker: SpeedTracker) -> int:
         """
         Download the file to a temp path, rename it into place
@@ -333,12 +335,12 @@ class PatcherCore:
         :raises ValueError: on a directory-traversal attempt
         :raises ActionCancelled: if cancelled mid-stream
         """
-        dest_path = os.path.normpath(os.path.join(self.working_dir, key))
-        if not is_safe_path(self.working_dir, dest_path):
+        dest_path = os.path.normpath(os.path.join(self._working_dir, key))
+
+        if not is_safe_path(self._working_dir, dest_path):
             raise ValueError(f"Directory traversal blocked: {key}")
 
-        url = self.remote_host + key
-        expected = self.updated_file_map[key].size
+        expected = self._updated_file_map[key].size
         file_name = key.split("/")[-1]
 
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
@@ -347,8 +349,9 @@ class PatcherCore:
         tmp_path: str | None
 
         tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(dest_path))
+
         try:
-            with self._net.stream_binary(url) as resp, os.fdopen(tmp_fd, "wb") as out:
+            with self._net.stream_binary(conn, key) as resp, os.fdopen(tmp_fd, "wb") as out:
                 tmp_fd = None
                 written = 0
                 speed_tracker = SpeedTracker()
@@ -422,8 +425,8 @@ class PatcherCore:
         successfully_removed: list[str] = []
 
         for rel_path in file_list:
-            abs_path = os.path.normpath(os.path.join(self.working_dir, rel_path))
-            if not is_safe_path(self.working_dir, abs_path):
+            abs_path = os.path.normpath(os.path.join(self._working_dir, rel_path))
+            if not is_safe_path(self._working_dir, abs_path):
                 self._log.error("Skipping unsafe path: %s", rel_path)
                 error += 1
                 continue

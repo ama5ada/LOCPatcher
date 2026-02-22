@@ -23,5 +23,6 @@
 !assets/docs
 !assets/docs/gamedir.png
 !assets/docs/patcher.png
+!LOCPatcher.spec
 
 !.gitignore

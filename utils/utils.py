@@ -4,6 +4,7 @@ import time
 import zlib
 from collections import deque
 from pathlib import Path
+from typing import Deque, Tuple
 
 
 def convert_file_size(size_in_bytes: int) -> str:
@@ -154,8 +155,7 @@ class SpeedTracker:
         self._last_time = self._start
         self._speed: float = 0.0
 
-        self._data_per_interval = deque([])
-        self._interval_timestamps = deque([])
+        self._interval_data: Deque[Tuple[float, int]] = deque()
         self._interval_sum = 0
         self._last_total = 0
 
@@ -172,15 +172,26 @@ class SpeedTracker:
             written_in_interval = total_written - self._last_total
             self._interval_sum += written_in_interval
             self._last_total = total_written
-            self._data_per_interval.append(written_in_interval)
-            self._interval_timestamps.append(now)
+            self._interval_data.append((now, written_in_interval))
 
-            last_time = self._start
+            expected_window = self._updated_interval * self._intervals_per_window
 
-            if len(self._data_per_interval) > self._intervals_per_window:
-                self._interval_sum -= self._data_per_interval.popleft()
-                last_time = self._interval_timestamps.popleft()
+            # window_start falls back through three candidates :
+            # 1. oldest retained interval timestamp - ideal ~5 s window
+            # 2. last evicted timestamp - avoids using self._start on slow connections
+            # 3. self._start - first interval, nothing evicted yet
+            window_start = self._start
 
-            self._speed = self._interval_sum / (now - last_time)
+            while self._interval_data and now - self._interval_data[0][0] > expected_window:
+                window_start, bytes_removed = self._interval_data.popleft()
+                self._interval_sum -= bytes_removed
+
+            if self._interval_data[0][0] != now:
+                window_start = self._interval_data[0][0]
+
+            actual_window = now - window_start
+
+            self._speed = self._interval_sum / actual_window
+
             self._last_time = now
         return self._speed

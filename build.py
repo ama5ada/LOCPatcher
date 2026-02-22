@@ -1,20 +1,9 @@
 import subprocess
 import sys
 
-def build() -> None:
-    args = [
-        sys.executable, "-m", "PyInstaller",
-        "main.py",
-        "--name", "LOCPatcher",
-        "--onedir",
-        "--windowed",
-        "--icon", "assets/MistServer_101.ico",
-        "--add-data", "assets/MistServer_101.ico;.",
-        "--clean",
-        "-y"
-    ]
 
-    subprocess.run(args, check=True)
+def build() -> None:
+    subprocess.run([sys.executable, "-m", "PyInstaller", "LOCPatcher.spec", "-y"])
 
 if __name__ == "__main__":
     build()
